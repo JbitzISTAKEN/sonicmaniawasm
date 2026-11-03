@@ -331,7 +331,23 @@ function waitForIntroToLoad() {
 
 // Data.rsdk is ~200MB and is mounted into Emscripten's virtual filesystem
 // before main() runs, because the engine opens it with plain fopen().
-const DATA_FILE = 'https://github.com/JbitzISTAKEN/sonicmaniawasm/releases/download/rsdk/Data.rsdk';
+const DATA_FILE = 'Data.rsdk';
+
+// The datapack is split into 10 files in build-web/chunks.
+// These relative URLs use the same origin as this index.html.
+const DATA_PARTS_VERSION = '1';
+const DATA_PARTS = [
+  'Data.rsdk.part-aa',
+  'Data.rsdk.part-ab',
+  'Data.rsdk.part-ac',
+  'Data.rsdk.part-ad',
+  'Data.rsdk.part-ae',
+  'Data.rsdk.part-af',
+  'Data.rsdk.part-ag',
+  'Data.rsdk.part-ah',
+  'Data.rsdk.part-ai',
+  'Data.rsdk.part-aj',
+].map((name) => new URL('./chunks/' + name, import.meta.url).href);
 // The engine loads its GLSL from Data/Shaders/OGL/ at runtime. Data.rsdk only
 // ships the DX9/DX11 shaders, so the ES 3.00 versions produced by
 // platforms/web/tools/translate-glsl.py are mounted here alongside it.
@@ -581,18 +597,11 @@ const DATA_CACHE = 'rsdkv5-datapack';
 const DATA_CHUNK_FALLBACK = 256 * 1048576;
 
 async function fetchDataFile() {
-  // The datapack is the same file across code builds, so key the cached copy
-  // on the file itself rather than on the build id. Otherwise every rebuild
-  // would invalidate the cache and make the player download 200 MB again.
-  let url = DATA_FILE;
-  try {
-    const head = await fetch(DATA_FILE, { method: 'HEAD', cache: 'no-store' });
-    if (head.ok) {
-      url = DATA_FILE +
-        '?len=' + encodeURIComponent(head.headers.get('Content-Length') || '') +
-        '&mtime=' + encodeURIComponent(head.headers.get('Last-Modified') || '');
-    }
-  } catch {}
+  // Increase DATA_PARTS_VERSION whenever the chunk files are replaced.
+  const cacheKey = new URL(
+    './' + DATA_FILE + '?parts=' + encodeURIComponent(DATA_PARTS_VERSION),
+    import.meta.url
+  ).href;
 
   let cache = null;
   try {
@@ -602,27 +611,80 @@ async function fetchDataFile() {
   }
 
   if (cache) {
-    const hit = await cache.match(url).catch(() => null);
+    const hit = await cache.match(cacheKey).catch(() => null);
     if (hit) {
       progress(84, 'using cached ' + DATA_FILE + '…');
-      pruneDataCache(cache, url);
+      pruneDataCache(cache, cacheKey);
       return { res: hit, cacheWrite: null, cached: true };
     }
   }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + DATA_FILE);
+  // Read each part's size for an accurate progress bar. If the host does not
+  // return Content-Length, the download still works without percentage text.
+  const partSizes = await Promise.all(DATA_PARTS.map(async (partUrl) => {
+    const head = await fetch(partUrl, { method: 'HEAD', cache: 'no-store' });
+    if (!head.ok) throw new Error('HTTP ' + head.status + ' checking ' + partUrl);
+    return Number(head.headers.get('Content-Length')) || 0;
+  }));
+  const total = partSizes.every((size) => size > 0)
+    ? partSizes.reduce((sum, size) => sum + size, 0)
+    : 0;
 
-  // Keep a copy for the next visit, so the 200 MB download happens once and
-  // later sessions mount it locally instead of hitting the network again.
-  // The promise is handed back so the loader can wait for the write to land
-  // before the game starts: leaving a 200 MB Cache Storage write running in
-  // the background is a good way to make the first minute of play hitch.
+  // Stream all ten parts as one Data.rsdk response. This avoids assembling
+  // the complete ~200 MB file in JavaScript memory.
+  let partIndex = 0;
+  let partReader = null;
+  const joinedStream = new ReadableStream({
+    async pull(controller) {
+      try {
+        for (;;) {
+          if (!partReader) {
+            if (partIndex >= DATA_PARTS.length) {
+              controller.close();
+              return;
+            }
+
+            const partUrl = DATA_PARTS[partIndex];
+            const response = await fetch(partUrl);
+            if (!response.ok)
+              throw new Error('HTTP ' + response.status + ' fetching ' + partUrl);
+            if (!response.body)
+              throw new Error('Streaming is unsupported for ' + partUrl);
+
+            partReader = response.body.getReader();
+          }
+
+          const { done, value } = await partReader.read();
+          if (done) {
+            partReader.releaseLock();
+            partReader = null;
+            partIndex++;
+            continue;
+          }
+
+          controller.enqueue(value);
+          return;
+        }
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      if (partReader) await partReader.cancel(reason).catch(() => {});
+    }
+  });
+
+  const headers = { 'Content-Type': 'application/octet-stream' };
+  if (total) headers['Content-Length'] = String(total);
+  const res = new Response(joinedStream, { headers });
+
+  // Cache the joined file so later visits do not need to download all parts.
   let cacheWrite = null;
   if (cache) {
-    pruneDataCache(cache, url);
-    cacheWrite = cache.put(url, res.clone()).catch(() => {});
+    pruneDataCache(cache, cacheKey);
+    cacheWrite = cache.put(cacheKey, res.clone()).catch(() => {});
   }
+
   return { res, cacheWrite, cached: false };
 }
 
