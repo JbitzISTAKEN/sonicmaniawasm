@@ -331,8 +331,7 @@ function waitForIntroToLoad() {
 
 // Data.rsdk is ~200MB and is mounted into Emscripten's virtual filesystem
 // before main() runs, because the engine opens it with plain fopen().
-const DATA_FILE = 'Data.rsdk';
-
+const DATA_FILE = 'https://github.com/JbitzISTAKEN/sonicmaniawasm/releases/download/rsdk/Data.rsdk';
 // The engine loads its GLSL from Data/Shaders/OGL/ at runtime. Data.rsdk only
 // ships the DX9/DX11 shaders, so the ES 3.00 versions produced by
 // platforms/web/tools/translate-glsl.py are mounted here alongside it.
