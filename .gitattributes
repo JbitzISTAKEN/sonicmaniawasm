@@ -1,5 +1,5 @@
 # default behaviour
 * text=auto
-
 # I do not like \r\n, \n supremacy
 *.txt text eol=lf
+*.rsdk filter=lfs diff=lfs merge=lfs -text
