@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<!-- 1:1 with the engine's own branding: RSDKv5U ships exactly one icon
+     (RSDKv5U.ico, used for IDI_APPLICATION and GLFW_ICON in RSDKv5U.rc), and
+     upstream has no web target, so that same file is the whole favicon story.
+     No game-specific icon is ever swapped in. -->
+<link rel="icon" id="favicon" type="image/x-icon" href="rsdkv5u.ico">
+<!-- Same name native uses: the window is created as "RSDKv5U" (the engine
+     name), then RetroEngine re-applies it from GameConfig.bin right after
+     InitEngine(), so the tab ends up on the game's own title. -->
+<title>RSDKv5U</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden;
+    font-family: system-ui, -apple-system, sans-serif; color: #eee;
+  }
+  /* The engine sizes the canvas to the viewport in auto mode, or to the
+     emulated RSDKv5 window in fixed Window Size / Window Aspect mode. */
+  #canvas {
+    display: block; position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%); width: 100vw; height: 100vh;
+    image-rendering: pixelated;
+  }
+
+  /* The overlay is deliberately plain: the browser's own <progress> rendering
+     on a black page, with the status line naming what is being fetched. */
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: #000; color: #fff; z-index: 10;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  #boot .loader { width: min(320px, calc(100vw - 48px)); text-align: center; }
+  #status { margin-bottom: 14px; font-size: 14px; letter-spacing: .04em; }
+  #progress {
+    display: block; width: 100%; height: 12px;
+    appearance: auto; -webkit-appearance: auto;
+  }
+  #err {
+    margin: 14px 0 0; color: #f77; font-size: 13px;
+    white-space: pre-wrap; text-align: left;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="boot">
+  <main class="loader" aria-live="polite">
+    <div id="status">Loading...</div>
+    <progress id="progress" value="0" max="100"></progress>
+    <pre id="err"></pre>
+  </main>
+</div>
+
+<script type="module">
+'use strict';
+
+const boot   = document.getElementById('boot');
+const progressEl = document.getElementById('progress');
+const status = document.getElementById('status');
+const errBox = document.getElementById('err');
+const canvas = document.getElementById('canvas');
+
+// The canvas always fills the browser viewport, so "windowed/fullscreen" is
+// a page-level state, not an SDL window flag. requestFullscreen() may only be
+// called during a user gesture, so remember what the game asked for and retry
+// on the next key press/click if the browser rejects it.
+let pendingFullscreen = null;
+let fullscreenRequestInFlight = false;
+let runtime = null;
+
+// ?reset=1 clears every persisted user file (save slots, options, replays) so
+// the next boot behaves exactly like a first launch. Files cached for
+// preloading are installation data, not player data, so they are left alone.
+// Clearing the object store (instead of deleting the database) also works when
+// another tab still holds a connection open.
+async function resetUserData() {
+  await new Promise((resolve) => {
+    const req = indexedDB.open('rsdkv5-web-saves', 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('files'))
+        req.result.createObjectStore('files');
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      let tx;
+      try {
+        tx = db.transaction('files', 'readwrite');
+      } catch {
+        db.close();
+        resolve();
+        return;
+      }
+      tx.objectStore('files').clear();
+      tx.oncomplete = tx.onerror = tx.onabort = () => { db.close(); resolve(); };
+    };
+    req.onerror = req.onblocked = () => resolve();
+  });
+
+  const url = new URL(location.href);
+  url.searchParams.delete('reset');
+  progress(2, 'resetting save data…');
+  location.replace(url.toString());
+}
+
+if (new URLSearchParams(location.search).has('reset')) await resetUserData();
+
+// Browsers do not let an AudioContext make noise until the page has seen a
+// real user gesture. miniaudio's built-in unlock only listens for
+// touchstart/touchend/click, so a player who only ever presses keys (the
+// normal way to play this port) ends up with permanent silence even though
+// the mixer is running. Wrap the constructor so every context the engine
+// creates is known to us and can be resumed on the first input of any kind.
+const engineAudioContexts = [];
+
+function resumeEngineAudio() {
+  for (const ctx of engineAudioContexts) {
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }
+}
+
+function captureAudioContexts() {
+  const Native = window.AudioContext || window.webkitAudioContext;
+  if (!Native || Native.__rsdkWrapped) return;
+
+  const Wrapped = function (...args) {
+    const ctx = new Native(...args);
+    engineAudioContexts.push(ctx);
+    // Works immediately when the browser already trusts this origin; when it
+    // does not, the gesture listeners below take care of it.
+    resumeEngineAudio();
+    return ctx;
+  };
+  Wrapped.prototype = Native.prototype;
+  Wrapped.__rsdkWrapped = true;
+  window.AudioContext = Wrapped;
+  if (window.webkitAudioContext) window.webkitAudioContext = Wrapped;
+
+  const unlockOn = ['keydown', 'keyup', 'pointerdown', 'pointerup',
+                    'mousedown', 'touchstart', 'click'];
+  for (const name of unlockOn)
+    window.addEventListener(name, resumeEngineAudio, { capture: true, passive: true });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) resumeEngineAudio();
+  });
+
+  // Read-only diagnostic handle (used by the automated web tests).
+  window.__rsdkAudioContexts = engineAudioContexts;
+}
+
+captureAudioContexts();
+
+// Focus parity with native. Native SDL2 reports focus loss, which makes the
+// engine freeze the game and pause every sound channel through
+// userCore->focusState. A browser tab may never deliver those SDL events (a
+// hidden page does not run requestAnimationFrame at all), so drive the same
+// engine state directly, release keys the browser will never send a keyup for,
+// and silence the AudioContext while the page is in the background.
+function suspendEngineAudio() {
+  for (const ctx of engineAudioContexts) {
+    if (ctx.state === 'running') ctx.suspend().catch(() => {});
+  }
+}
+
+function notifyFocus(focused) {
+  if (runtime) {
+    if (runtime._RSDK_WebSetFocus) runtime._RSDK_WebSetFocus(focused ? 1 : 0);
+    if (!focused && runtime._RSDK_WebReleaseAllKeys) runtime._RSDK_WebReleaseAllKeys();
+  }
+
+  if (focused) resumeEngineAudio();
+  else suspendEngineAudio();
+}
+
+window.addEventListener('blur', () => notifyFocus(false));
+window.addEventListener('focus', () => notifyFocus(true));
+document.addEventListener('visibilitychange', () => notifyFocus(!document.hidden));
+window.addEventListener('pagehide', () => notifyFocus(false));
+window.addEventListener('pageshow', () => notifyFocus(!document.hidden));
+
+function applyPendingFullscreen() {
+  if (pendingFullscreen === null || fullscreenRequestInFlight) return;
+
+  const want = pendingFullscreen;
+  const isFullscreen = !!document.fullscreenElement;
+  if (want === isFullscreen) {
+    pendingFullscreen = null;
+    return;
+  }
+
+  fullscreenRequestInFlight = true;
+  const request = want
+    ? document.documentElement.requestFullscreen()
+    : document.exitFullscreen();
+
+  Promise.resolve(request)
+    .catch(() => {})
+    .then(() => {
+      fullscreenRequestInFlight = false;
+      if (!!document.fullscreenElement === want) pendingFullscreen = null;
+    });
+}
+
+window.__rsdkSetFullscreen = (want) => {
+  pendingFullscreen = !!want;
+  applyPendingFullscreen();
+};
+
+window.addEventListener('keydown', () => {
+  // Native RSDKv5 has no fullscreen hotkey: F11 is the dev-menu frame-step
+  // key and Alt+Enter does nothing. Fullscreen lives in the Options menu, and
+  // a mode the engine has already requested is applied on the next gesture.
+  applyPendingFullscreen();
+}, true);
+
+window.addEventListener('pointerdown', applyPendingFullscreen, true);
+
+document.addEventListener('fullscreenchange', () => {
+  const isFullscreen = !!document.fullscreenElement;
+  if (pendingFullscreen === isFullscreen) pendingFullscreen = null;
+  if (runtime && runtime._RSDK_SetBrowserFullscreenState)
+    runtime._RSDK_SetBrowserFullscreenState(isFullscreen ? 1 : 0);
+});
+
+document.addEventListener('fullscreenerror', () => { fullscreenRequestInFlight = false; });
+
+// Cursor parity with native. KBInputDevice hides the pointer after ~2 s
+// without mouse movement and restores it on the next move, in windowed mode
+// too. Emscripten's SDL_ShowCursor instead requests a pointer lock while
+// fullscreen, so the WebGL backend routes ShowCursor() through this hook.
+window.__rsdkSetCursor = (shown) => {
+  document.body.style.cursor = shown ? '' : 'none';
+};
+
+
+function progress(pct, msg) {
+  progressEl.value = Math.max(0, Math.min(100, pct));
+  if (msg) status.textContent = msg;
+}
+
+function fail(err) {
+  status.textContent = 'failed to start';
+  progressEl.value = 0;
+  progressEl.style.display = 'none';
+  // Native reports startup failures in an OS message box; keep the dialog
+  // short and readable and leave the stack trace in the console.
+  errBox.textContent = (err && (err.message || err.toString())) || String(err);
+  console.error(err);
+}
+
+// The engine is already running behind the loader once callMain() returns, but
+// its first seconds are the most expensive of the whole session: the WebGL
+// context and every shader program are cold, V8 has only baseline-compiled the
+// wasm, the audio graph starts, and the first assets are decoded. Showing that
+// ramp is exactly the "it only runs smoothly after a while" complaint.
+//
+// Hold the loader until requestAnimationFrame is actually pacing the engine at
+// display rate, then fade out. rAF intervals stretch whenever an engine frame
+// overruns its budget, so a short streak of short intervals is a direct
+// measurement of smoothness rather than a guess. The cap guarantees the loader
+// can never get stuck if the machine simply cannot hit 60fps.
+function waitForStableFrames() {
+  // "Stable" must follow the display that is actually in front of the player:
+  // a 30 Hz or 120 Hz panel is not a stutter. Frames are compared to the
+  // median of the last second instead of a hard 16.7 ms budget, so the loader
+  // only waits for real hitches (shader compilation, GC, disk flush).
+  const MIN_WARMUP_MS = 2200; // let background wasm/GPU work settle first
+  const MAX_WARMUP_MS = 6000; // never hold the player longer than this
+  const NEEDED_STREAK = 24;   // ~0.4-0.8 s of consecutive good frames
+
+  return new Promise((resolve) => {
+    const start = performance.now();
+    let last = start;
+    let frames = 0;
+    let worst = 0;
+    const hist = [];
+
+    const tick = (now) => {
+      const dt = now - last;
+      last = now;
+      frames++;
+      if (dt > worst) worst = dt;
+
+      if (dt > 0) {
+        hist.push(dt);
+        if (hist.length > NEEDED_STREAK) hist.shift();
+      }
+
+      const elapsed = now - start;
+      let stable = false;
+      if (elapsed >= MIN_WARMUP_MS && hist.length === NEEDED_STREAK) {
+        const sorted = [...hist].sort((a, b) => a - b);
+        const median = sorted[sorted.length >> 1];
+        stable = sorted[sorted.length - 1] <= median * 1.35 + 3;
+      }
+
+      if (stable || elapsed >= MAX_WARMUP_MS) {
+        window.__rsdkWarmup = { frames, ms: elapsed, worst, stable };
+        console.log('[rsdk] warm-up', window.__rsdkWarmup);
+        resolve();
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// A scene change is not visible until the engine has finished loading it and
+// flipped the new frame: until then the canvas keeps showing the previous frame
+// (the warm-up's last one, often the SEGA logo). Loading runs inside the
+// engine's animation frame and blocks the main thread, so polling the scene
+// state from rAF only ever observes it after the new frame is on screen.
+// Resolves when the intro has been loaded (or after ~10s as a safety net).
+function waitForIntroToLoad() {
+  if (!runtime || !runtime._RSDK_WebSceneLoading) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let frames = 0;
+    const tick = () => {
+      if (!runtime._RSDK_WebSceneLoading() || ++frames > 600) resolve();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// Data.rsdk is ~200MB and is mounted into Emscripten's virtual filesystem
+// before main() runs, because the engine opens it with plain fopen().
+const DATA_FILE = 'Data.rsdk';
+
+// The engine loads its GLSL from Data/Shaders/OGL/ at runtime. Data.rsdk only
+// ships the DX9/DX11 shaders, so the ES 3.00 versions produced by
+// platforms/web/tools/translate-glsl.py are mounted here alongside it.
+const SHADER_FILES = [
+  'None.vs', 'None.fs', 'Clean.fs', 'CRT-Yeetron.fs', 'CRT-Yee64.fs',
+  'YUV-420.fs', 'YUV-422.fs', 'YUV-444.fs', 'RGB-Image.fs',
+];
+
+// Cache-busting. build-web.sh stamps the real wasm hash into BUILD_ID, so a
+// rebuilt engine can never be masked by a stale HTTP cache entry. Without this
+// the browser silently re-runs a previously cached RetroEngine.js/.wasm, which
+// makes a fixed build look like it changed nothing.
+const BUILD_ID = '7873367901097191';
+
+function bust(url) {
+  if (!BUILD_ID || BUILD_ID.startsWith('__')) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(BUILD_ID);
+}
+
+// ---------------------------------------------------------------------------
+// Persistent save data
+// ---------------------------------------------------------------------------
+// Emscripten's MEMFS disappears on reload. Sonic Mania writes its native
+// SaveData.bin / Options.bin / Settings.ini (and replay .bin files) through
+// ordinary fopen/fwrite/fclose, so mirror those root-level user files into
+// IndexedDB and restore them before callMain(). Data.rsdk and the shaders stay
+// HTTP-loaded and are deliberately excluded.
+const SAVE_DB_NAME = 'rsdkv5-web-saves';
+const SAVE_DB_VERSION = 1;
+const SAVE_STORE = 'files';
+let saveDBPromise = null;
+let persistChain = Promise.resolve();
+const persistedStats = new Map();
+
+function openSaveDB() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+
+  if (!saveDBPromise) {
+    saveDBPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(SAVE_DB_NAME, SAVE_DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(SAVE_STORE))
+          db.createObjectStore(SAVE_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }).catch((err) => {
+      console.warn('[save] IndexedDB unavailable; saves will not persist', err);
+      return null;
+    });
+  }
+  return saveDBPromise;
+}
+
+async function idbRequest(mode, fn) {
+  const db = await openSaveDB();
+  if (!db) return null;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SAVE_STORE, mode);
+    const store = tx.objectStore(SAVE_STORE);
+    const req = fn(store);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }).catch((err) => {
+    console.warn('[save] IndexedDB operation failed', err);
+    return null;
+  });
+}
+
+function normalizeSavePath(path) {
+  if (!path) return '';
+  return path[0] === '/' ? path : '/' + path;
+}
+
+function isPersistentUserFile(path) {
+  path = normalizeSavePath(path);
+  if (!path || path === '/Data.rsdk' || path.startsWith('/Data/')) return false;
+  return /\.(bin|ini)$/i.test(path);
+}
+
+function fileStamp(stat) {
+  const mtime = stat.mtime instanceof Date ? stat.mtime.getTime() : (stat.mtimeMs || 0);
+  return String(stat.size) + ':' + String(mtime);
+}
+
+function persistFileFromFS(rt, path, force = false) {
+  path = normalizeSavePath(path);
+  if (!rt || !rt.FS || !isPersistentUserFile(path)) return;
+
+  let bytes, stat;
+  try {
+    stat  = rt.FS.stat(path);
+    bytes = rt.FS.readFile(path);
+  } catch {
+    persistedStats.delete(path);
+    return;
+  }
+
+  // The 5-second backstop scans the root. Skip unchanged files so a loaded
+  // SaveData.bin isn't rewritten to IndexedDB every few seconds. A real
+  // fclose() always forces the write, even if size/mtime happen to match.
+  const stamp = fileStamp(stat);
+  if (!force && persistedStats.get(path) === stamp) return;
+  persistedStats.set(path, stamp);
+
+  const copy = bytes.slice();
+  persistChain = persistChain
+    .then(() => idbRequest('readwrite', (store) => store.put(copy, path)))
+    .catch(() => {});
+}
+
+async function persistAllUserFiles(rt) {
+  if (!rt || !rt.FS) return;
+
+  let names = [];
+  try {
+    names = rt.FS.readdir('/');
+  } catch {
+    return;
+  }
+
+  for (const name of names) {
+    if (name === '.' || name === '..') continue;
+
+    const path = '/' + name;
+    if (!isPersistentUserFile(path)) continue;
+
+    try {
+      const stat = rt.FS.stat(path);
+      if (!rt.FS.isFile(stat.mode)) continue;
+    } catch {
+      continue;
+    }
+    persistFileFromFS(rt, path);
+  }
+
+  await persistChain;
+}
+
+async function restoreUserFiles(rt) {
+  const db = await openSaveDB();
+  if (!db) return;
+
+  const entries = await new Promise((resolve, reject) => {
+    const tx = db.transaction(SAVE_STORE, 'readonly');
+    const req = tx.objectStore(SAVE_STORE).openCursor();
+    const out = [];
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) {
+        resolve(out);
+        return;
+      }
+      out.push([cursor.key, cursor.value]);
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  }).catch((err) => {
+    console.warn('[save] restore failed', err);
+    return [];
+  });
+
+  for (const [path, value] of entries) {
+    const normalized = normalizeSavePath(String(path));
+    if (!isPersistentUserFile(normalized)) continue;
+
+    try {
+      rt.FS.mkdirTree(normalized.slice(0, normalized.lastIndexOf('/')) || '/');
+      rt.FS.writeFile(normalized, new Uint8Array(value));
+    } catch (err) {
+      console.warn('[save] could not restore', normalized, err);
+    }
+  }
+
+  if (entries.length) console.log('[save] restored ' + entries.length + ' file(s)');
+}
+
+function installSaveHooks(rt) {
+  const fs = rt.FS;
+
+  if (typeof fs.close === 'function') {
+    const origClose = fs.close.bind(fs);
+    fs.close = function(stream) {
+      const path = stream && stream.path;
+      const result = origClose(stream);
+      if (path) persistFileFromFS(rt, path, true);
+      return result;
+    };
+  }
+
+  if (typeof fs.unlink === 'function') {
+    const origUnlink = fs.unlink.bind(fs);
+    fs.unlink = function(path) {
+      const result = origUnlink(path);
+      if (isPersistentUserFile(path)) {
+        const normalized = normalizeSavePath(path);
+        persistedStats.delete(normalized);
+        persistChain = persistChain
+          .then(() => idbRequest('readwrite', (store) => store.delete(normalized)))
+          .catch(() => {});
+      }
+      return result;
+    };
+  }
+
+  // Some engine paths write through FS.write instead of fclose, and a tab can
+  // be closed without another close hook. Track the paths that were written so
+  // this backstop only touches IndexedDB when something actually changed --
+  // scanning the whole filesystem every 5 s on a timer is exactly the sort of
+  // idle work that shows up as a periodic hitch.
+  const dirtySaves = new Set();
+  if (typeof fs.write === 'function') {
+    const origWrite = fs.write.bind(fs);
+    fs.write = function(stream, buffer, offset, length, position) {
+      const path = stream && stream.path;
+      const result = origWrite(stream, buffer, offset, length, position);
+      if (path && isPersistentUserFile(path)) dirtySaves.add(normalizeSavePath(path));
+      return result;
+    };
+  }
+
+  setInterval(() => {
+    if (!dirtySaves.size) return;
+    const paths = Array.from(dirtySaves);
+    dirtySaves.clear();
+    for (const path of paths) persistFileFromFS(rt, path);
+  }, 5000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistAllUserFiles(rt);
+  });
+  window.addEventListener('pagehide', () => { persistAllUserFiles(rt); });
+}
+
+// The datapack is ~200 MB. It used to be fetched into a Blob, copied into an
+// ArrayBuffer and then written into MEMFS, which left 200 MB of live data on
+// V8's JS heap (plus a second temporary copy during load). Every garbage
+// collection then had to deal with that much more memory, which is where the
+// "it hitches every few seconds" stutter came from.
+//
+// Now the bytes are streamed straight into the wasm heap -- invisible to the
+// JS collector -- and served to the engine through a tiny MEMFS node that
+// reads from that buffer. The only JS objects involved are the short-lived
+// fetch chunks.
+const DATA_CACHE = 'rsdkv5-datapack';
+const DATA_CHUNK_FALLBACK = 256 * 1048576;
+
+async function fetchDataFile() {
+  // The datapack is the same file across code builds, so key the cached copy
+  // on the file itself rather than on the build id. Otherwise every rebuild
+  // would invalidate the cache and make the player download 200 MB again.
+  let url = DATA_FILE;
+  try {
+    const head = await fetch(DATA_FILE, { method: 'HEAD', cache: 'no-store' });
+    if (head.ok) {
+      url = DATA_FILE +
+        '?len=' + encodeURIComponent(head.headers.get('Content-Length') || '') +
+        '&mtime=' + encodeURIComponent(head.headers.get('Last-Modified') || '');
+    }
+  } catch {}
+
+  let cache = null;
+  try {
+    cache = await caches.open(DATA_CACHE);
+  } catch {
+    cache = null; // private mode / no Cache API: just download every time
+  }
+
+  if (cache) {
+    const hit = await cache.match(url).catch(() => null);
+    if (hit) {
+      progress(84, 'using cached ' + DATA_FILE + '…');
+      pruneDataCache(cache, url);
+      return { res: hit, cacheWrite: null, cached: true };
+    }
+  }
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + DATA_FILE);
+
+  // Keep a copy for the next visit, so the 200 MB download happens once and
+  // later sessions mount it locally instead of hitting the network again.
+  // The promise is handed back so the loader can wait for the write to land
+  // before the game starts: leaving a 200 MB Cache Storage write running in
+  // the background is a good way to make the first minute of play hitch.
+  let cacheWrite = null;
+  if (cache) {
+    pruneDataCache(cache, url);
+    cacheWrite = cache.put(url, res.clone()).catch(() => {});
+  }
+  return { res, cacheWrite, cached: false };
+}
+
+// Old builds keep their own cache key, and a stale 200 MB entry per rebuild
+// would slowly eat the origin's storage quota.
+function pruneDataCache(cache, keepUrl) {
+  // cache.keys() reports absolute URLs, so normalise before comparing --
+  // otherwise every cache hit would delete the entry it just used.
+  const keep = new URL(keepUrl, location.href).href;
+  cache.keys()
+    .then((keys) => {
+      for (const key of keys) {
+        if (key.url !== keep && key.url.indexOf(DATA_FILE) !== -1)
+          cache.delete(key).catch(() => {});
+      }
+    })
+    .catch(() => {});
+}
+
+function mountDataPackNode(rt, ptr, size) {
+  const FS = rt.FS;
+  try {
+    FS.unlink('/' + DATA_FILE);
+  } catch {}
+
+  FS.createDataFile('/', DATA_FILE, new Uint8Array(0), true, true);
+
+  const node = FS.lookupPath('/' + DATA_FILE).node;
+  node.usedBytes = size;
+  node.contents = new Uint8Array(0);
+  node.stream_ops = Object.assign({}, node.stream_ops, {
+    read(stream, buffer, offset, length, position) {
+      if (position == null) position = stream.position;
+      if (position >= size) return 0;
+      const count = Math.min(length, size - position);
+      if (count <= 0) return 0;
+      // FS hands us a typed-array view into wasm memory, not a raw pointer.
+      // HEAPU8 is re-read on every call because a wasm memory growth replaces
+      // the view; copying subarrays is a plain memmove inside wasm memory.
+      buffer.set(rt.HEAPU8.subarray(ptr + position, ptr + position + count), offset);
+      return count;
+    },
+  });
+}
+
+async function mountDataPack(rt) {
+  const { res, cacheWrite, cached } = await fetchDataFile();
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  if (!res.body) throw new Error('streaming ' + DATA_FILE + ' is unsupported');
+
+  let capacity = total || DATA_CHUNK_FALLBACK;
+  let ptr = rt._malloc(capacity);
+  if (!ptr) throw new Error('could not reserve ' + capacity + ' bytes for ' + DATA_FILE);
+
+  const reader = res.body.getReader();
+  let received = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    if (received + value.length > capacity) {
+      const grown = Math.max(capacity * 2, received + value.length);
+      const moved = rt._malloc(grown);
+      if (!moved) throw new Error('could not grow the ' + DATA_FILE + ' buffer');
+      rt.HEAPU8.copyWithin(moved, ptr, ptr + received);
+      rt._free(ptr);
+      ptr = moved;
+      capacity = grown;
+    }
+
+    rt.HEAPU8.set(value, ptr + received);
+    received += value.length;
+
+    if (total) {
+      progress(5 + (received / total) * 78,
+               (cached ? 'loading ' : 'downloading ') + DATA_FILE + '… ' +
+               (received / 1048576).toFixed(0) + ' / ' +
+               (total / 1048576).toFixed(0) + ' MB');
+    }
+  }
+
+  if (total && received !== total)
+    throw new Error(DATA_FILE + ' was truncated after ' + received + ' of ' + total + ' bytes');
+
+  // Do not let a 200 MB disk write overlap with the first frames of gameplay.
+  if (cacheWrite) {
+    progress(86, 'saving ' + DATA_FILE + ' for next visit…');
+    await cacheWrite.catch(() => {});
+  }
+
+  mountDataPackNode(rt, ptr, received);
+}
+
+async function mountShaders(rt) {
+  rt.FS.mkdirTree('/Data/Shaders/OGL');
+  for (const name of SHADER_FILES) {
+    // Shaders are versioned with the build too. Without this the browser can
+    // keep a previously cached (broken) shader even after the wasm is rebuilt,
+    // which silently shifts the shader indices and makes YUV video go green.
+    const res = await fetch(bust('Data/Shaders/OGL/' + name));
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching shader ' + name);
+    rt.FS.writeFile('/Data/Shaders/OGL/' + name, new Uint8Array(await res.arrayBuffer()));
+  }
+}
+
+// Settings.ini is mandatory, not cosmetic. UserCore.cpp gates the whole
+// startup on it:
+//
+//     dictionary *ini = iniparser_load("<userFileDir>Settings.ini");
+//     if (ini) { ... LoadDataPack("Data.rsdk") ... }
+//
+// Without it the datapack is never opened, so no game files load, the scene
+// list is empty, and the engine parks in ENGINESTATE_NONE with a black screen
+// and no error to explain it.
+async function mountSettings(rt) {
+  const res = await fetch(bust('Settings.ini'));
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching Settings.ini');
+  rt.FS.writeFile('/Settings.ini', new Uint8Array(await res.arrayBuffer()));
+}
+
+try {
+  progress(5, 'downloading engine…');
+
+  const Module = {
+    canvas,
+    print:     (t) => console.log('[rsdk]', t),
+    printErr:  (t) => console.error('[rsdk]', t),
+    printAsync:(t) => console.log('[rsdk]', t),
+    onAbort:   (what) => fail('wasm aborted: ' + what),
+    locateFile:(p) => p.endsWith('.wasm') ? bust(new URL('./RetroEngine.wasm', import.meta.url).href) : p,
+  };
+
+  // INVOKE_RUN=0 means the factory resolves with the runtime initialised but
+  // main() NOT yet called. That is what lets us populate the FS first.
+  const { default: createRetroEngine } = await import(bust(new URL('./RetroEngine.js', import.meta.url).href));
+  const rt = await createRetroEngine(Module);
+  runtime = rt;
+  // Exposed for diagnostics only. Safe to remove before release.
+  window.__rsdkRuntime = rt;
+
+  progress(82, 'downloading shaders…');
+  await mountShaders(rt);
+  await mountSettings(rt);
+
+  progress(84, 'loading ' + DATA_FILE + '…');
+  await mountDataPack(rt);
+  progress(93, DATA_FILE + ' ready…');
+
+  progress(95, 'restoring save data…');
+  await restoreUserFiles(rt);
+  installSaveHooks(rt);
+
+  progress(97, 'starting engine…');
+  // Now that Data.rsdk exists, hand control to the engine's main loop.
+  rt.callMain();
+
+  // The warm-up below runs the Logos intro behind this overlay. Keep the mixer
+  // silent so the SEGA chime is not heard twice: once from the warm-up and
+  // again when the intro is rewound for the reveal.
+  if (rt._RSDK_WebSetAudioMuted) rt._RSDK_WebSetAudioMuted(1);
+
+  // The engine sets the window title to the game name during startup, but the
+  // favicon stays on the engine icon: native RSDKv5U has no game-specific
+  // icon to swap to, so neither does this.
+
+  // The first frames after main() are far more expensive than steady state:
+  // the WebGL context and all shader programs come up, V8 tiers up the wasm
+  // code it just instantiated, the audio graph starts, and the engine decodes
+  // its first assets. Presenting that to the player is exactly the "it only
+  // runs smoothly after a while" problem -- the warm-up happened on screen.
+  //
+  // So keep the loader up until the engine is genuinely presenting frames at
+  // a steady cadence, then reveal it. The scene that ran during the warm-up is
+  // rewound below, so the player still sees the intro from its first frame.
+  progress(100, 'warming up…');
+  await waitForStableFrames();
+
+  // Native has no start prompt: it just goes from black to the SEGA logo.
+  // Browsers only let an AudioContext make noise after a real gesture, so if
+  // the player has not clicked or pressed a key by now the intro will be
+  // silent until their first input. Matching the boot sequence wins here.
+
+  // The engine has been running behind the loader while the GPU and wasm
+  // warmed up, so the first scene (Logos) is already part-way through.
+  // Native shows it from its first frame, so start it over: the intro then
+  // plays in full, from black, exactly like Windows.
+  if (runtime && runtime._RSDK_WebRewindIntro) {
+    runtime._RSDK_WebRewindIntro();
+    console.log('[rsdk] rewound to the first scene');
+  }
+
+  // Keep the overlay up until the reloaded intro has presented its first
+  // frame. Removing it here instead would expose the warm-up's final frame
+  // (the silent SEGA logo) for however long the scene reload takes.
+  await waitForIntroToLoad();
+
+  // The intro is on screen now, so let the mixer through: the chime plays once,
+  // with the picture, never from under the loader.
+  if (runtime && runtime._RSDK_WebSetAudioMuted) runtime._RSDK_WebSetAudioMuted(0);
+
+  boot.remove();
+} catch (err) {
+  fail(err);
+}
+
+window.addEventListener('error', (e) => fail(e.error || e.message));
+</script>
+</body>
+</html>

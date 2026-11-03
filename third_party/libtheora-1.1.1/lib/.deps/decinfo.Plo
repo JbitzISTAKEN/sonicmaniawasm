@@ -1,0 +1,83 @@
+decinfo.lo: decinfo.c \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/stdlib.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdlib.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/features.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/alltypes.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/alloca.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/string.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/string.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/strings.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/limits.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/limits.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/limits.h \
+  decint.h ../include/theora/theoradec.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/stddef.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stddef.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_header_macro.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_ptrdiff_t.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_size_t.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_wchar_t.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_null.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_max_align_t.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_offsetof.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/ogg.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/os_types.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/config_types.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/inttypes.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/inttypes.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/stdint.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdint.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/sys/types.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/endian.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/endian.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/sys/select.h \
+  ../include/theora/codec.h internal.h ../config.h \
+  ../include/theora/theora.h ocintrin.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/math.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/math.h \
+  huffman.h quant.h bitpack.h huffdec.h dequant.h
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/stdlib.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdlib.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/features.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/alltypes.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/alloca.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/string.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/string.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/strings.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/limits.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/limits.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/limits.h:
+decint.h:
+../include/theora/theoradec.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/stddef.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stddef.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_header_macro.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_ptrdiff_t.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_size_t.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_wchar_t.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_null.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_max_align_t.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/__stddef_offsetof.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/ogg.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/os_types.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/ogg/config_types.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/inttypes.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/inttypes.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/stdint.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdint.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/sys/types.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/endian.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/endian.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/sys/select.h:
+../include/theora/codec.h:
+internal.h:
+../config.h:
+../include/theora/theora.h:
+ocintrin.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/math.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/math.h:
+huffman.h:
+quant.h:
+bitpack.h:
+huffdec.h:
+dequant.h:

@@ -1,0 +1,25 @@
+bitpack.lo: bitpack.c \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/string.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/string.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/features.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/alltypes.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/strings.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/stdlib.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdlib.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/alloca.h \
+  bitpack.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/limits.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/limits.h \
+  /opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/limits.h
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/string.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/string.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/features.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/alltypes.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/strings.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/compat/stdlib.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/stdlib.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/alloca.h:
+bitpack.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/llvm/lib/clang/24/include/limits.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/limits.h:
+/opt/homebrew/Cellar/emscripten/6.0.12/libexec/cache/sysroot/include/bits/limits.h:
